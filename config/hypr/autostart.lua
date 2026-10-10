@@ -6,4 +6,3 @@ o.exec_on_start("clipse -listen")
 
 -- Music ambient reactive effects daemon.
 o.exec_on_start(os.getenv("HOME") .. "/.config/hypr/scripts/music-ambient.sh")
-
