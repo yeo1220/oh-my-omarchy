@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# Print pending application updates, one package name per line.
+# Kernel packages and Omarchy itself are left for a full system update.
+
+set -euo pipefail
+
+is_kept() {
+  case "$1" in
+    omarchy | linux | linux-omarchy | linux-headers | linux-api-headers | linux-firmware | archlinux-keyring)
+      return 0
+      ;;
+  esac
+  [[ $1 == linux-* || $1 == linux-firmware-* ]]
+}
+
+while read -r pkg _rest; do
+  [[ -n ${pkg:-} ]] || continue
+  is_kept "$pkg" && continue
+  printf '%s\n' "$pkg"
+done < <(checkupdates --nocolor 2>/dev/null || true)

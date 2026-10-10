@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Show the Nintendo Switch (HDMI capture card) in a low-latency mpv window, with sound.
+# Usage: switch-view [720]   (default 1080p30; "720" = 1280x720@60, smoother for action games)
+# This card (MS2109) advertises 1080p60 but delivers empty frames at that mode.
+set -euo pipefail
+
+DEV=/dev/v4l/by-id/usb-MACROSILICON_USB_Video-video-index0
+AUDIO_SRC=alsa_input.usb-MACROSILICON_USB_Video-02.analog-stereo
+SIZE=1920x1080 FPS=30
+[[ "${1:-}" == "720" ]] && SIZE=1280x720 FPS=60
+
+if [[ ! -e "$DEV" ]]; then
+  echo "캡처카드를 찾을 수 없습니다: $DEV" >&2
+  exit 1
+fi
+
+# Route capture-card audio to the default output while the viewer is open.
+# Use explicit --capture/--playback so WirePlumber reliably links the MS2109
+# source to the current default sink.
+DEFAULT_SINK=$(pactl get-default-sink 2>/dev/null || true)
+if [[ -n "$DEFAULT_SINK" ]]; then
+  pw-loopback --name switch-view-audio --capture "$AUDIO_SRC" --playback "$DEFAULT_SINK" --latency=20ms &
+else
+  pw-loopback --name switch-view-audio --capture "$AUDIO_SRC" --latency=20ms &
+fi
+LOOP_PID=$!
+trap 'kill "$LOOP_PID" 2>/dev/null || true' EXIT
+
+mpv "av://v4l2:$DEV" \
+  --demuxer-lavf-o="input_format=mjpeg,video_size=$SIZE,framerate=$FPS" \
+  --profile=low-latency --untimed --no-cache \
+  --title="Nintendo Switch" --force-window=yes --osc=no

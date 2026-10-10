@@ -1,0 +1,279 @@
+#!/usr/bin/python3
+# omarchy:summary=Print the Gemini / Antigravity usage record as JSON
+# omarchy:args=[--force] [--limits-only]
+# omarchy:hidden=true
+"""Collect Gemini / Antigravity usage into one display-ready JSON record.
+
+Emits live quota limits from `agy -p /usage` and transcript token statistics
+from ~/.gemini/antigravity-cli/brain/ for the Omarchy agents panel.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+AGENT_ID = "gemini"
+AGENT_NAME = "Gemini"
+AUTH_HELP = "Run `antigravity` to authenticate."
+
+
+def cache_dir() -> Path:
+  root = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "omarchy" / "agent-usage"
+  root.mkdir(parents=True, exist_ok=True)
+  return root
+
+
+def collect_limits(force: bool = False, max_age: float = 60.0) -> dict[str, Any]:
+  cache_file = cache_dir() / "gemini-limits-cache.json"
+  if not force and cache_file.exists():
+    try:
+      mtime = cache_file.stat().st_mtime
+      if time.time() - mtime < max_age:
+        with open(cache_file, "r", encoding="utf-8") as f:
+          return json.load(f)
+    except Exception:
+      pass
+
+  limits: list[dict[str, Any]] = []
+  status_text = ""
+
+  agy_bin = os.path.expanduser("~/.local/bin/agy")
+  if not os.path.isfile(agy_bin):
+    agy_bin = "agy"
+
+  try:
+    proc = subprocess.run(
+        [agy_bin, "-p", "/usage", "--output-format", "json"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if proc.returncode == 0 and proc.stdout.strip():
+      data = json.loads(proc.stdout)
+      cmd_data = data.get("command", {}).get("data", {})
+      groups = cmd_data.get("groups", [])
+      for g in groups:
+        g_name = g.get("name", "")
+        for b in g.get("buckets", []):
+          b_window = b.get("window", "")
+          rem_frac = b.get("remaining_fraction", 1.0)
+          used_pct = round(max(0.0, min(1.0, 1.0 - rem_frac)), 4)
+          res_time = b.get("reset_time", "")
+
+          if "Gemini" in g_name:
+            if b_window == "5h":
+              limits.append({
+                  "label": "Session (5-hour)",
+                  "title": "Session",
+                  "percent": used_pct,
+                  "resetsAt": res_time,
+              })
+            elif b_window == "weekly":
+              limits.append({
+                  "label": "Weekly (7-day)",
+                  "title": "Weekly",
+                  "percent": used_pct,
+                  "resetsAt": res_time,
+              })
+          else:
+            if b_window == "5h":
+              limits.append({
+                  "label": "Claude/GPT (5-hour)",
+                  "title": "Claude/GPT Session",
+                  "percent": used_pct,
+                  "resetsAt": res_time,
+              })
+            elif b_window == "weekly":
+              limits.append({
+                  "label": "Claude/GPT (Weekly)",
+                  "title": "Claude/GPT Weekly",
+                  "percent": used_pct,
+                  "resetsAt": res_time,
+              })
+    else:
+      status_text = "Gemini limits unavailable"
+  except Exception:
+    status_text = "Gemini limits unavailable"
+
+  # Sort limits so Session (5h) comes before Weekly (7d)
+  window_order = {"Session": 0, "Weekly": 1, "Claude/GPT Session": 2, "Claude/GPT Weekly": 3}
+  limits.sort(key=lambda x: window_order.get(x.get("title", ""), 99))
+
+  # Fallback to stale cache if call failed
+  if not limits and cache_file.exists():
+    try:
+      with open(cache_file, "r", encoding="utf-8") as f:
+        stale = json.load(f)
+        if stale.get("limits"):
+          return stale
+    except Exception:
+      pass
+
+  result = {
+      "limits": limits,
+      "usageStatusText": status_text,
+      "authHelpText": AUTH_HELP,
+  }
+  if limits:
+    try:
+      with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(result, f)
+    except Exception:
+      pass
+  return result
+
+
+def collect_stats(force: bool = False, max_age: float = 30.0) -> dict[str, Any]:
+  cache_file = cache_dir() / "gemini-stats-cache.json"
+  if not force and cache_file.exists():
+    try:
+      mtime = cache_file.stat().st_mtime
+      if time.time() - mtime < max_age:
+        with open(cache_file, "r", encoding="utf-8") as f:
+          return json.load(f)
+    except Exception:
+      pass
+
+  transcripts = glob.glob(
+      os.path.expanduser(
+          "~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl"
+      )
+  )
+  today_str = dt.datetime.now().strftime("%Y-%m-%d")
+
+  day_tokens: dict[str, int] = {}
+  day_prompts: dict[str, int] = {}
+  day_sessions: dict[str, set[str]] = {}
+  model_usage: dict[str, dict[str, int]] = {}
+  today_by_model: dict[str, int] = {}
+  total_prompts = 0
+  all_sessions: set[str] = set()
+
+  default_model = "gemini-3.8-flash-high"
+
+  for t in transcripts:
+    sess_id = os.path.basename(
+        os.path.dirname(os.path.dirname(os.path.dirname(t)))
+    )
+    all_sessions.add(sess_id)
+    sess_active_dates: set[str] = set()
+
+    try:
+      with open(t, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+          if not line.strip():
+            continue
+          try:
+            d = json.loads(line)
+          except Exception:
+            continue
+
+          created_at = d.get("created_at")
+          if not created_at:
+            continue
+          date_str = created_at[:10]
+          sess_active_dates.add(date_str)
+
+          if d.get("type") == "USER_INPUT":
+            total_prompts += 1
+            day_prompts[date_str] = day_prompts.get(date_str, 0) + 1
+
+          inp = d.get("input_tokens") or 0
+          out = d.get("output_tokens") or 0
+          cache_read = d.get("cache_read_tokens") or 0
+          step_total = inp + out
+
+          day_tokens[date_str] = day_tokens.get(date_str, 0) + step_total
+
+          m = model_usage.setdefault(
+              default_model,
+              {
+                  "inputTokens": 0,
+                  "outputTokens": 0,
+                  "cacheReadInputTokens": 0,
+                  "cacheCreationInputTokens": 0,
+              },
+          )
+          m["inputTokens"] += inp
+          m["outputTokens"] += out
+          m["cacheReadInputTokens"] += cache_read
+
+          if date_str == today_str:
+            today_by_model[default_model] = (
+                today_by_model.get(default_model, 0) + step_total
+            )
+    except Exception:
+      continue
+
+    for d_str in sess_active_dates:
+      day_sessions.setdefault(d_str, set()).add(sess_id)
+
+  recent_days = []
+  today_dt = dt.datetime.now().date()
+  for i in range(6, -1, -1):
+    d_val = (today_dt - dt.timedelta(days=i)).strftime("%Y-%m-%d")
+    recent_days.append({
+        "date": d_val,
+        "messageCount": day_tokens.get(d_val, 0),
+    })
+
+  active_dates = sorted(list(day_tokens.keys()))
+
+  res = {
+      "todayPrompts": day_prompts.get(today_str, 0),
+      "todaySessions": len(day_sessions.get(today_str, set())),
+      "todayTotalTokens": day_tokens.get(today_str, 0),
+      "todayTokensByModel": today_by_model,
+      "recentDays": recent_days,
+      "totalPrompts": total_prompts,
+      "totalSessions": len(all_sessions),
+      "activeDays": len(active_dates),
+      "activeDates": active_dates,
+      "modelUsage": model_usage,
+  }
+
+  try:
+    with open(cache_file, "w", encoding="utf-8") as f:
+      json.dump(res, f)
+  except Exception:
+    pass
+
+  return res
+
+
+def main() -> int:
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--force", action="store_true", help="Force refresh")
+  parser.add_argument("--limits-only", action="store_true", help="Only refresh limits")
+  args, _ = parser.parse_known_args()
+
+  limits = collect_limits(force=args.force, max_age=15.0 if args.limits_only else 60.0)
+  stats = collect_stats(force=args.force, max_age=900.0 if args.limits_only else 30.0)
+
+  record: dict[str, Any] = {
+      "schemaVersion": 1,
+      "id": AGENT_ID,
+      "name": AGENT_NAME,
+      "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+      "ready": True,
+      "hasLocalStats": True,
+      "tierLabel": "Google One",
+      "usageStatusText": limits.get("usageStatusText", ""),
+      "authHelpText": limits.get("authHelpText", ""),
+      "limits": limits.get("limits", []),
+  }
+  record.update(stats)
+  print(json.dumps(record, separators=(",", ":"), sort_keys=True))
+  return 0
+
+
+if __name__ == "__main__":
+  raise SystemExit(main())

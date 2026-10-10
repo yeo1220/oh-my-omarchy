@@ -1,0 +1,54 @@
+#!/usr/bin/python3
+"""Reuse the packaged collector with a buffer-safe JSONL RPC reader."""
+import json
+import os
+import runpy
+import select
+import time
+
+
+def rpc_request(proc, request_id, method, params=None, timeout=8):
+    proc.stdin.write(json.dumps({'id': request_id, 'method': method, 'params': params or {}}) + '\n')
+    proc.stdin.flush()
+    deadline = time.monotonic() + timeout
+    pending = getattr(proc, '_usage_rpc_pending', b'')
+    try:
+        while True:
+            # Drain complete buffered messages before waiting on the descriptor.
+            # TextIOWrapper.readline() can prefetch the next response, leaving
+            # select() waiting on an empty pipe even though the reply arrived.
+            while b'\n' in pending:
+                line, pending = pending.split(b'\n', 1)
+                try:
+                    message = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if isinstance(message, dict) and message.get('id') == request_id:
+                    if 'error' in message:
+                        error = message['error']
+                        raise RuntimeError(f"{method}: {error.get('message', error) if isinstance(error, dict) else error}")
+                    return message
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(method)
+            ready, _, _ = select.select([proc.stdout], [], [], min(remaining, 0.25))
+            if not ready:
+                continue
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
+                raise RuntimeError(f'{method}: app-server closed its output')
+            pending += chunk
+    finally:
+        proc._usage_rpc_pending = pending
+
+
+def main():
+    upstream = runpy.run_path('/usr/share/omarchy/bin/omarchy-agent-usage-codex')
+    def request(proc, request_id, method, params=None, timeout=8):
+        return rpc_request(proc, request_id, method, params, max(timeout, 15))
+    upstream['fetch_codex_rpc'].__globals__['rpc_request'] = request
+    upstream['main']()
+
+
+if __name__ == '__main__':
+    main()

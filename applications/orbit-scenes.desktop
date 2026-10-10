@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 작업 환경
+Comment=Orbit Tools · 작업 환경
+Exec=orbit-tools scenes
+Icon=preferences-desktop-workspaces
+Terminal=false
+Categories=Utility;
+Keywords=orbit;scenes;

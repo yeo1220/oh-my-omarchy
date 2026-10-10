@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 똑똑한 붙여넣기
+Comment=Orbit Tools · 똑똑한 붙여넣기
+Exec=orbit-tools paste
+Icon=edit-paste
+Terminal=false
+Categories=Utility;
+Keywords=orbit;paste;

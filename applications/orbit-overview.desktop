@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 전체 창
+Comment=Orbit Tools · 전체 창
+Exec=orbit-tools overview
+Icon=preferences-system-windows
+Terminal=false
+Categories=Utility;
+Keywords=orbit;overview;

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+if [[ ${1:-} == overview ]]; then
+  exec omarchy shell shell toggle lovehouse.overview
+fi
+exec /usr/bin/python3 "$HOME/.local/share/oh-my-omarchy/orbit-tools/app.py" "$@"

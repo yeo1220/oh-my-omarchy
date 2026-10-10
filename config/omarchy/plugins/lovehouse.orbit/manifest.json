@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "lovehouse.orbit",
+  "name": "Orbit Desk",
+  "version": "1.0.0",
+  "author": "Lovehouse",
+  "description": "집중 타이머, 오늘의 메모, 작업 바로가기",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "Panel.qml"},
+  "barWidget": {
+    "displayName": "Orbit Desk",
+    "description": "집중과 작업을 위한 작은 데스크",
+    "category": "Productivity",
+    "allowMultiple": false
+  }
+}

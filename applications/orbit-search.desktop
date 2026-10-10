@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 문서 검색
+Comment=Orbit Tools · 문서 검색
+Exec=orbit-tools search
+Icon=system-search
+Terminal=false
+Categories=Utility;
+Keywords=orbit;search;

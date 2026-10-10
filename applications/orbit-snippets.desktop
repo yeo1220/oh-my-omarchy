@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 문구 자동 입력
+Comment=Orbit Tools · 문구 자동 입력
+Exec=orbit-tools snippets
+Icon=accessories-text-editor
+Terminal=false
+Categories=Utility;
+Keywords=orbit;snippets;

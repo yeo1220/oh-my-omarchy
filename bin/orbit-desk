@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (( $# == 0 )); then
+  exec omarchy shell shell toggle lovehouse.orbit
+fi
+exec /usr/bin/python3 "$HOME/.config/omarchy/plugins/lovehouse.orbit/orbit.py" "$@"

@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Announce a program's crash once per signal, then keep a running count on
+# that same notification. A click opens today's grouped list.
+
+set -uo pipefail
+
+readonly COREDUMP_MESSAGE_ID=fc2e22bc6ee647b6b90729ab34a250b1
+readonly CRASH_GLYPH=$'\U000f16a1'
+readonly ignore_pattern=${OMARCHY_CRASH_IGNORE:-}
+
+declare -A counts=()
+declare -A notify_ids=()
+
+announce() {
+  local name=$1 signal=$2 count=$3
+  local key="$name"$'\t'"$signal"
+  local id=${notify_ids[$key]:-0}
+  local headline="프로세스가 죽었습니다: $name"
+  local body="$signal · 오늘 ${count}회. 클릭하면 오늘 목록이 열립니다."
+
+  omarchy-notification-wait || return 1
+
+  local new_id
+  new_id=$(omarchy-notification-send \
+    --urgency critical \
+    --glyph "$CRASH_GLYPH" \
+    -t 0 \
+    -r "$id" \
+    -p \
+    "$headline" \
+    "$body" \
+    --exec "${HOME}/.local/bin/lovehouse-crash-list") || return 1
+
+  [[ $new_id =~ ^[0-9]+$ ]] || return 1
+  notify_ids[$key]=$new_id
+}
+
+journalctl -f -n 0 -o json "MESSAGE_ID=$COREDUMP_MESSAGE_ID" 2>/dev/null |
+  while IFS= read -r entry; do
+    IFS=$'\t' read -r uid comm pid exe signal < <(
+      jq -r '[(._UID // "-"),
+              (.COREDUMP_COMM // "-"),
+              (.COREDUMP_PID // "-"),
+              (.COREDUMP_EXE // "-"),
+              (.COREDUMP_SIGNAL_NAME // "-")] | @tsv' <<<"$entry" 2>/dev/null
+    )
+
+    [[ $pid =~ ^[0-9]+$ ]] || continue
+    [[ $uid =~ ^[0-9]+$ ]] || continue
+    ((uid == UID)) || continue
+
+    name=$comm
+    [[ $exe == /* ]] && name=${exe##*/}
+    [[ -n $name && $name != "-" ]] || continue
+    [[ -n $ignore_pattern && $name =~ $ignore_pattern ]] && continue
+    [[ $name == omarchy-crash-* || $name == omarchy-agent-* || $name == lovehouse-crash-* ]] && continue
+    [[ -n $signal && $signal != "-" ]] || signal=unknown
+
+    key="$name"$'\t'"$signal"
+    counts[$key]=$((${counts[$key]:-0} + 1))
+    announce "$name" "$signal" "${counts[$key]}" || true
+  done

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "lovehouse.overview",
+  "name": "Orbit Overview",
+  "version": "1.0.0",
+  "author": "Lovehouse",
+  "description": "창 미리보기, 검색, 작업 공간 이동",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {"overlay": "Overview.qml"}
+}

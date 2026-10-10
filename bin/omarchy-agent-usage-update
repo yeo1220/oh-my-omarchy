@@ -1,0 +1,87 @@
+#!/bin/bash
+# omarchy:summary=Regenerate AI agent usage data files (including stock agents + Gemini)
+# omarchy:args=[--force] [--limits-only] [--except <agent>] [agent...]
+
+USAGE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents/usage"
+mkdir -p "$USAGE_DIR"
+
+# 1. Run upstream omarchy collector for stock agents in background
+if [[ -x /usr/share/omarchy/bin/omarchy-agent-usage-update ]]; then
+  /usr/share/omarchy/bin/omarchy-agent-usage-update --except codex "$@" &
+  upstream_pid=$!
+else
+  upstream_pid=""
+fi
+
+# Local collectors (Gemini, Cursor) follow the same --except / positional filter
+# as the upstream updater.
+agent_wanted() {
+  local name=$1 arg next_i
+  shift
+  for ((i=1; i<=$#; i++)); do
+    arg="${!i}"
+    if [[ $arg == "--except" ]]; then
+      next_i=$((i + 1))
+      [[ ${!next_i:-} == "$name" ]] && return 1
+    fi
+  done
+
+  local -a positional=()
+  local skip_next=false
+  for arg in "$@"; do
+    if [[ $skip_next == true ]]; then
+      skip_next=false
+      continue
+    fi
+    case "$arg" in
+      --except) skip_next=true ;;
+      --force|--limits-only) ;;
+      *) positional+=("$arg") ;;
+    esac
+  done
+  ((${#positional[@]} == 0)) && return 0
+  local cand
+  for cand in "${positional[@]}"; do
+    [[ $cand == "$name" ]] && return 0
+  done
+  return 1
+}
+
+# 3. Collect gemini
+collector_flags=()
+for arg in "$@"; do
+  case "$arg" in
+    --force|--limits-only) collector_flags+=("$arg") ;;
+  esac
+done
+
+collect_local() {
+  local name=$1
+  shift
+  local collector="$HOME/.local/bin/omarchy-agent-usage-$name"
+  agent_wanted "$name" "$@" || return 0
+  [[ -x $collector ]] || return 0
+  (
+    local record tmp
+    record=$("$collector" "${collector_flags[@]}") || exit 1
+    [[ -n $record ]] && jq -e . >/dev/null 2>&1 <<<"$record" || exit 1
+    tmp=$(mktemp "$USAGE_DIR/.$name.XXXXXX")
+    printf '%s\n' "$record" >"$tmp"
+    mv "$tmp" "$USAGE_DIR/$name.json"
+  ) &
+  local_pids+=($!)
+}
+
+local_pids=()
+collect_local codex "$@"
+collect_local gemini "$@"
+collect_local cursor "$@"
+
+# Wait for background jobs
+status=0
+[[ -n "$upstream_pid" ]] && { wait "$upstream_pid" || status=1; }
+for pid in "${local_pids[@]}"; do
+  wait "$pid" || status=1
+done
+
+exit $status

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "idle": {
+    "screensaver": 150,
+    "lock": false,
+    "dpms": 300
+  },
+  "bar": {
+    "position": "top",
+    "transparent": true,
+    "centerAnchor": "",
+    "layout": {
+      "left": [
+        {
+          "id": "omarchy.menu"
+        },
+        {
+          "id": "omarchy.workspaces"
+        },
+        {
+          "id": "lovehouse.agents",
+          "refreshIntervalSec": 300,
+          "providerOrder": [
+            "gemini",
+            "codex",
+            "claude",
+            "cursor"
+          ],
+          "providers": {
+            "claude": {
+              "enabled": true
+            },
+            "codex": {
+              "enabled": true
+            },
+            "cursor": {
+              "enabled": true
+            },
+            "fireworks": {
+              "enabled": false
+            },
+            "gemini": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "center": [],
+      "right": [
+        {
+          "id": "lovehouse.orbit"
+        },
+        {
+          "id": "lovehouse.indicators"
+        },
+        {
+          "id": "lovehouse.keyboard-layout"
+        },
+        {
+          "id": "omarchy.tray"
+        },
+        {
+          "id": "lovehouse.bluetooth"
+        },
+        {
+          "id": "omarchy.network"
+        },
+        {
+          "id": "omarchy.audio"
+        },
+        {
+          "id": "omarchy.clock",
+          "format": "MM.dd ddd  HH:mm",
+          "formatAlt": "yyyy년 M월 d일 dddd",
+          "verticalFormat": "HH\n—\nmm"
+        },
+        {
+          "id": "omarchy.power"
+        }
+      ]
+    }
+  },
+  "plugins": [
+    {
+      "id": "lovehouse.overview"
+    },
+    {
+      "id": "lovehouse.idle"
+    },
+    {
+      "id": "lovehouse.background"
+    }
+  ],
+  "disabledPlugins": [
+    "omarchy.idle",
+    "omarchy.background"
+  ],
+  "cloneSourceRestores": [
+    "lovehouse.background"
+  ]
+}

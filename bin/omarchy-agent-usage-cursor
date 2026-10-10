@@ -1,0 +1,175 @@
+#!/usr/bin/python3
+# omarchy:summary=Print the Cursor subscription usage record as JSON
+# omarchy:args=[--force] [--limits-only]
+# omarchy:hidden=true
+"""Collect Cursor plan usage into one display-ready JSON record.
+
+Reads GetCurrentPeriodUsage and GetPlanInfo with the CLI's stored access
+token. The bar shows the fuller of the Auto and API allowances.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+AGENT_ID = "cursor"
+AGENT_NAME = "Cursor"
+AUTH_HELP = "Run `agent login` to authenticate."
+API = "https://api2.cursor.sh/aiserver.v1.DashboardService"
+
+
+def cache_dir() -> Path:
+    root = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "omarchy" / "agent-usage"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def auth_token() -> str:
+    path = Path.home() / ".config" / "cursor" / "auth.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    token = data.get("accessToken")
+    return token if isinstance(token, str) else ""
+
+
+def post(token: str, method: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{API}/{method}",
+        data=b"{}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Connect-Protocol-Version": "1",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def iso_from_millis(value: Any) -> str:
+    try:
+        millis = int(str(value))
+    except (TypeError, ValueError):
+        return ""
+    if millis <= 0:
+        return ""
+    return dt.datetime.fromtimestamp(millis / 1000, dt.timezone.utc).isoformat()
+
+
+def fraction(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number < 0:
+        return None
+    # The dashboard reports these as 0–100, the panel stores 0–1.
+    if number > 1:
+        number = number / 100
+    return max(0.0, min(1.0, number))
+
+
+def collect_limits(force: bool = False, max_age: float = 60.0) -> dict[str, Any]:
+    cache_file = cache_dir() / "cursor-limits-cache.json"
+    if not force and cache_file.exists():
+        try:
+            if time.time() - cache_file.stat().st_mtime < max_age:
+                cached = json.loads(cache_file.read_text(encoding="utf-8"))
+                if cached.get("limits"):
+                    return cached
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    token = auth_token()
+    if not token:
+        return {"limits": [], "tierLabel": "", "usageStatusText": "", "authHelpText": AUTH_HELP}
+
+    status_text = ""
+    tier = ""
+    limits: list[dict[str, Any]] = []
+    try:
+        usage = post(token, "GetCurrentPeriodUsage")
+        plan = post(token, "GetPlanInfo")
+        plan_info = plan.get("planInfo") if isinstance(plan.get("planInfo"), dict) else {}
+        tier = str(plan_info.get("planName") or "")
+        plan_usage = usage.get("planUsage") if isinstance(usage.get("planUsage"), dict) else {}
+        resets_at = iso_from_millis(usage.get("billingCycleEnd") or plan_info.get("billingCycleEnd"))
+        windows = (
+            ("Auto", "Auto", plan_usage.get("autoPercentUsed")),
+            ("API", "API", plan_usage.get("apiPercentUsed")),
+        )
+        for title, label, raw in windows:
+            percent = fraction(raw)
+            if percent is None:
+                continue
+            limits.append({
+                "label": label,
+                "title": title,
+                "percent": round(percent, 4),
+                "resetsAt": resets_at,
+            })
+    except urllib.error.HTTPError as error:
+        status_text = "Cursor login expired" if error.code in (401, 403) else "Cursor limits unavailable"
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        status_text = "Cursor limits unavailable"
+
+    if not limits and cache_file.exists():
+        try:
+            stale = json.loads(cache_file.read_text(encoding="utf-8"))
+            if stale.get("limits"):
+                return stale
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    result = {
+        "limits": limits,
+        "tierLabel": tier,
+        "usageStatusText": status_text,
+        "authHelpText": AUTH_HELP if status_text else "",
+    }
+    if limits:
+        try:
+            cache_file.write_text(json.dumps(result), encoding="utf-8")
+        except OSError:
+            pass
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--limits-only", action="store_true")
+    args, _ = parser.parse_known_args()
+
+    limits = collect_limits(force=args.force, max_age=15.0 if args.limits_only else 60.0)
+    record = {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "ready": True,
+        "hasLocalStats": False,
+        "hasPromptStats": False,
+        "tierLabel": limits.get("tierLabel") or "Cursor",
+        "usageStatusText": limits.get("usageStatusText", ""),
+        "authHelpText": limits.get("authHelpText", ""),
+        "limits": limits.get("limits", []),
+    }
+    print(json.dumps(record, separators=(",", ":"), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

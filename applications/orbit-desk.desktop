@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit Desk
+Comment=집중 타이머, 메모, 작업 바로가기
+Exec=orbit-desk
+Icon=applications-utilities
+Terminal=false
+Categories=Utility;
+Keywords=focus;timer;pomodoro;note;집중;타이머;메모;

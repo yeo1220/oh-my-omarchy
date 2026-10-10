@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit 파일 선반
+Comment=Orbit Tools · 파일 선반
+Exec=orbit-tools shelf
+Icon=folder-download
+Terminal=false
+Categories=Utility;
+Keywords=orbit;shelf;

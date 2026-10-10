@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Update pending applications, leaving the kernel and Omarchy untouched.
+# Afterwards, name the programs that are still running from those packages.
+
+set -euo pipefail
+
+mapfile -t apps < <(lovehouse-app-updates)
+
+if ((${#apps[@]} == 0)); then
+  echo "대기 중인 앱 업데이트가 없습니다."
+  omarchy-notification-send "앱 업데이트" "대기 중인 앱 업데이트가 없습니다"
+  exit 0
+fi
+
+echo "커널과 Omarchy는 그대로 두고, 아래 앱만 갱신합니다."
+printf '  %s\n' "${apps[@]}"
+echo
+read -r -p "갱신할까요? [y/N] " answer
+[[ $answer == [yY] ]] || {
+  echo "취소했습니다."
+  exit 0
+}
+
+sudo pacman -S --noconfirm -- "${apps[@]}"
+
+declare -A reopen=()
+while read -r pid comm; do
+  [[ $pid =~ ^[0-9]+$ ]] || continue
+  exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)
+  [[ -n $exe && -e $exe ]] || continue
+  owner=$(pacman -Qqo "$exe" 2>/dev/null | head -n 1 || true)
+  [[ -n $owner ]] || continue
+  for pkg in "${apps[@]}"; do
+    if [[ $owner == "$pkg" ]]; then
+      reopen[$comm]=1
+    fi
+  done
+done < <(ps -u "$USER" -o pid=,comm=)
+
+if ((${#reopen[@]} == 0)); then
+  omarchy-notification-send "앱 업데이트" "갱신을 마쳤습니다. 다시 열 프로그램은 없습니다."
+  exit 0
+fi
+
+names=$(printf '%s\n' "${!reopen[@]}" | sort)
+omarchy-notification-send "다시 열어야 하는 프로그램" "$names"
+printf '\n다시 열어야 하는 프로그램:\n%s\n' "$names"

@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Omarchy remote work launcher. Stores account names, never passwords."""
+import concurrent.futures
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import subprocess
+import sys
+
+HOSTS_FILE = Path.home() / ".config/remote-work/hosts.json"
+HOSTS = json.loads(HOSTS_FILE.read_text()) if HOSTS_FILE.exists() else {}
+
+CONFIG = Path.home() / ".config/remote-work/accounts.json"
+SELF = str(Path(__file__).resolve())
+
+
+def run(args, timeout=15):
+    return subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+
+
+def notify(message):
+    subprocess.run(["notify-send", "원격 작업", message], check=False)
+
+
+def menu(title, options):
+    r = run(["omarchy", "menu", "select", title, *options, "--", "--width", "620"], None)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def peers():
+    r = run(["tailscale", "status", "--json"])
+    if r.returncode:
+        raise RuntimeError("Tailscale 상태를 읽을 수 없습니다. 서비스와 로그인을 확인하세요.")
+    data = json.loads(r.stdout)
+    if data.get("BackendState") != "Running":
+        raise RuntimeError("Tailscale 로그인이 필요하거나 서비스가 꺼져 있습니다.")
+    result = {}
+    for name in HOSTS:
+        matches = [p for p in (data.get("Peer") or {}).values()
+                   if p.get("HostName", "").lower() == name]
+        if len(matches) > 1:
+            raise RuntimeError(f"{name}: 같은 이름의 장비가 여러 대입니다.")
+        p = matches[0] if matches else {}
+        addresses = [str(ipaddress.ip_address(x)) for x in p.get("TailscaleIPs", [])]
+        result[name] = {"online": bool(p.get("Online")),
+                        "ip": next((x for x in addresses if ":" not in x), None),
+                        "found": bool(p)}
+    return result
+
+
+def port_open(ip, port):
+    if not ip:
+        return False
+    try:
+        with socket.create_connection((ip, port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+def check_ports(peer):
+    if not peer["online"]:
+        return {22: False, 3389: False}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        values = list(pool.map(lambda p: port_open(peer["ip"], p), [22, 3389]))
+    return dict(zip([22, 3389], values))
+
+
+def accounts():
+    if not CONFIG.exists():
+        return {}
+    value = json.loads(CONFIG.read_text())
+    if not isinstance(value, dict):
+        raise RuntimeError("계정 설정 파일 형식이 잘못되었습니다.")
+    return value
+
+
+def account(name, protocol, edit=False):
+    saved = accounts()
+    key = name + "/" + protocol
+    value = saved.get(key, "")
+    if edit or not value:
+        r = run(["omarchy", "menu", "input", f"{name} · {protocol} 계정명 (비밀번호 아님)", "--width", "620"], None)
+        if r.returncode or not r.stdout.strip():
+            return None
+        value = r.stdout.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.@\\ -]{0,127}", value):
+            notify("계정명 형식을 확인하세요. 비밀번호는 입력하지 마세요.")
+            return None
+        saved[key] = value
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        tmp = CONFIG.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(saved, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        tmp.replace(CONFIG)
+    return value
+
+
+def connect(name, protocol, ip, user):
+    subprocess.Popen(["foot", "--title", f"{HOSTS[name]} · {name}", SELF,
+                      "--session", name, protocol, ip, user], start_new_session=True)
+
+
+def session(name, protocol, ip, user):
+    if name not in HOSTS or protocol not in ("SSH", "RDP"):
+        raise RuntimeError("지원하지 않는 접속 대상입니다.")
+    ip = str(ipaddress.ip_address(ip))
+    print(f"{HOSTS[name]} / {name} / {protocol}\n계정: {user}\n", flush=True)
+    if protocol == "SSH":
+        cmd = ["ssh", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=30",
+               "-o", "ServerAliveCountMax=3", "-o", f"HostKeyAlias={name}", "-l", user, ip]
+    else:
+        cmd = ["xfreerdp3", f"/v:{ip}", f"/u:{user}", "/from-stdin:force",
+               "/dynamic-resolution", "/size:1100x650", "-grab-keyboard",
+               f"/title:Windows · {name}"]
+    code = subprocess.call(cmd)
+    print(f"\n연결 종료 (코드 {code}).", flush=True)
+    input("Enter를 누르면 창을 닫습니다.")
+
+
+def main():
+    if not HOSTS:
+        raise RuntimeError("~/.config/remote-work/hosts.json에 장비 목록을 설정하세요 (examples/remote-work-hosts.json 참고).")
+    if len(sys.argv) == 6 and sys.argv[1] == "--session":
+        return session(*sys.argv[2:])
+    if sys.argv[1:] == ["--status"]:
+        data = peers()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            ports = list(pool.map(check_ports, data.values()))
+        for (name, p), opened in zip(data.items(), ports):
+            print(json.dumps({"host": name, "role": HOSTS[name], **p, "ports": opened}, ensure_ascii=False))
+        return
+    while True:
+        data = peers()
+        labels = {f"{role} · {name}  [{('온라인' if p['online'] else '오프라인') if p['found'] else '미등록'}]": name
+                  for name, role in HOSTS.items() for p in [data[name]]}
+        chosen = menu("원격 작업 · 장비 선택", [*labels, "새로고침", "닫기"])
+        if not chosen or chosen == "닫기":
+            return
+        if chosen not in labels:
+            continue
+        name = labels[chosen]
+        p = peers()[name]
+        if not p["online"]:
+            notify(f"{name}: 오프라인 또는 미등록입니다. 대상 장비의 전원과 Tailscale을 확인하세요.")
+            continue
+        opened = check_ports(p)
+        actions = []
+        if opened[22]:
+            actions.append("SSH 터미널 연결")
+        if HOSTS[name] == "Windows" and opened[3389]:
+            actions.append("Windows 원격 데스크톱")
+        if not actions:
+            notify(f"{name}: 접속 포트 응답이 없습니다. SSH/RDP 서비스와 접근 정책을 확인하세요.")
+        chosen = menu(f"{name} · {p['ip']}", actions + ["계정명 변경", "뒤로"])
+        if chosen == "계정명 변경":
+            protocol = menu("저장할 계정 종류", ["SSH", "RDP"] if HOSTS[name] == "Windows" else ["SSH"])
+            if protocol:
+                account(name, protocol, edit=True)
+        elif chosen in actions:
+            protocol = "RDP" if chosen == "Windows 원격 데스크톱" else "SSH"
+            user = account(name, protocol)
+            if user:
+                connect(name, protocol, p["ip"], user)
+                return
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        print(str(exc), file=sys.stderr)
+        notify(str(exc))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        pass

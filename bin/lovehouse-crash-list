@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# Show today's crash dumps, grouped by program and signal.
+
+set -euo pipefail
+
+if [[ ! -t 1 ]]; then
+  exec omarchy-launch-floating-terminal-with-presentation "$0"
+fi
+
+declare -A counts=()
+declare -A signals=()
+
+while IFS=$'\t' read -r sig exe; do
+  [[ -n ${exe:-} && $exe == /* ]] || continue
+  name=${exe##*/}
+  key="$name"$'\t'"$sig"
+  counts[$key]=$((${counts[$key]:-0} + 1))
+  signals[$key]=$sig
+done < <(coredumpctl list --since today --no-legend --no-pager 2>/dev/null | awk '{
+  sig = ""
+  exe = ""
+  for (i = 1; i <= NF; i++) {
+    if ($i ~ /^SIG/) sig = $i
+    if ($i ~ /^\//) exe = $i
+  }
+  if (exe != "") print sig "\t" exe
+}')
+
+echo "오늘 죽은 프로그램"
+echo
+
+if ((${#counts[@]} == 0)); then
+  echo "없습니다."
+else
+  while IFS= read -r key; do
+    name=${key%%$'\t'*}
+    printf '%s  ·  %s  ·  %s회\n' "$name" "${signals[$key]}" "${counts[$key]}"
+  done < <(printf '%s\n' "${!counts[@]}" | sort)
+fi
+
+echo
+read -r -p "엔터를 누르면 닫힙니다. "

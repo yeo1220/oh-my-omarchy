@@ -1,0 +1,14 @@
+[Unit]
+Description=Music ambient wallpaper with automatic recovery
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.config/hypr/scripts/music-ambient.py
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=12
+
+[Install]
+WantedBy=graphical-session.target
